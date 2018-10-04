@@ -208,22 +208,22 @@ func importName(iprog *loader.Program, info *loader.PackageInfo, fromPath, fromN
 				"skipping update of this file")
 			continue // ignore errors; leave the existing name
 		}
-		if err := r.update(); err != nil {
+		if _, err := r.update(); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func Main(ctxt *build.Context, offsetFlag, fromFlag, to string) error {
+func Main(ctxt *build.Context, offsetFlag, fromFlag, to string) ([]string, error) {
 	// -- Parse the -from or -offset specifier ----------------------------
 
 	if (offsetFlag == "") == (fromFlag == "") {
-		return fmt.Errorf("exactly one of the -from and -offset flags must be specified")
+		return []string{}, fmt.Errorf("exactly one of the -from and -offset flags must be specified")
 	}
 
 	if !isValidIdentifier(to) {
-		return fmt.Errorf("-to %q: not a valid identifier", to)
+		return []string{}, fmt.Errorf("-to %q: not a valid identifier", to)
 	}
 
 	if Diff {
@@ -239,23 +239,23 @@ func Main(ctxt *build.Context, offsetFlag, fromFlag, to string) error {
 		spec, err = parseOffsetFlag(ctxt, offsetFlag)
 	}
 	if err != nil {
-		return err
+		return []string{}, err
 	}
 
 	if spec.fromName == to {
-		return fmt.Errorf("the old and new names are the same: %s", to)
+		return []string{}, fmt.Errorf("the old and new names are the same: %s", to)
 	}
 
 	// -- Load the program consisting of the initial package  -------------
 
 	iprog, err := loadProgram(ctxt, map[string]bool{spec.pkg: true})
 	if err != nil {
-		return err
+		return []string{}, err
 	}
 
 	fromObjects, err := findFromObjects(iprog, spec)
 	if err != nil {
-		return err
+		return []string{}, err
 	}
 
 	// -- Load a larger program, for global renamings ---------------------
@@ -299,12 +299,12 @@ func Main(ctxt *build.Context, offsetFlag, fromFlag, to string) error {
 		// Re-load the larger program.
 		iprog, err = loadProgram(ctxt, affectedPackages)
 		if err != nil {
-			return err
+			return []string{}, err
 		}
 
 		fromObjects, err = findFromObjects(iprog, spec)
 		if err != nil {
-			return err
+			return []string{}, err
 		}
 	}
 
@@ -347,7 +347,7 @@ func Main(ctxt *build.Context, offsetFlag, fromFlag, to string) error {
 		r.check(from)
 	}
 	if r.hadConflicts && !Force {
-		return ConflictError
+		return []string{}, ConflictError
 	}
 	return r.update()
 }
@@ -451,7 +451,7 @@ func requiresGlobalRename(fromObjects []types.Object, to string) bool {
 }
 
 // update updates the input files.
-func (r *renamer) update() error {
+func (r *renamer) update() ([]string, error) {
 	// We use token.File, not filename, since a file may appear to
 	// belong to multiple packages and be parsed more than once.
 	// token.File captures this distinction; filename does not.
@@ -494,8 +494,10 @@ func (r *renamer) update() error {
 			}
 		}
 	}
+	var filesUpdated []string
 	if !Force && len(generatedFileNames) > 0 {
-		return fmt.Errorf("refusing to modify generated file%s containing DO NOT EDIT marker: %v", plural(len(generatedFileNames)), generatedFileNames)
+		err := fmt.Errorf("refusing to modify generated file%s containing DO NOT EDIT marker: %v", plural(len(generatedFileNames)), generatedFileNames)
+		return filesUpdated, err
 	}
 
 	// Write affected files.
@@ -524,6 +526,10 @@ func (r *renamer) update() error {
 					log.Print(err)
 					nerrs++
 				}
+
+				if !Diff {
+					filesUpdated = append(filesUpdated, filename)
+				}
 			}
 		}
 	}
@@ -534,9 +540,10 @@ func (r *renamer) update() error {
 			npkgs, plural(npkgs))
 	}
 	if nerrs > 0 {
-		return fmt.Errorf("failed to rewrite %d file%s", nerrs, plural(nerrs))
+		return filesUpdated, fmt.Errorf("failed to rewrite %d file%s", nerrs, plural(nerrs))
 	}
-	return nil
+
+	return filesUpdated, nil
 }
 
 // docComment returns the doc for an identifier.
